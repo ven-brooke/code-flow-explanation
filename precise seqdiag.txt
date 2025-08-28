@@ -1,0 +1,106 @@
+@startuml
+actor User
+participant "main()" as Main
+
+User -> Main: start ./seed
+Main -> ServerT: [async] server_thread (per port; background)
+loop menu loop
+    Main -> User: show_menu()
+
+    alt User selects "List available files" (choice == 1)
+        User -> Main: select option 1
+        Main -> GLF: get_local_files(port)
+        GLF -> ListFilesRec: list_files_recursive()
+        ListFilesRec --> GLF: (file info - return)
+        GLF --> Main: (local file list - return)
+
+        Main -> GAP: get_active_ports(port)
+        GAP --> Main: (active_ports - return)
+
+        alt active_ports not empty
+            loop for each active_port
+                Main -> RFP: request_files_from_port(active_port)
+                ' --- Request/Response Pair ---
+                RFP -> HandleClient: [socket] "LIST_FILES"       '<< REQUEST
+                HandleClient -> GLF: get_local_files(active_port)
+                GLF -> ListFilesRec: list_files_recursive()
+                ListFilesRec --> GLF: (file info)
+                GLF --> HandleClient: (vector<FileInfo>)
+                HandleClient --> RFP: (file info as string)      '<< RESPONSE
+                RFP --> Main: (vector<FileInfo> from port)
+            end
+            Main -> User: display deduplicated file list
+        else
+            Main -> User: "No other active ports found"
+        end
+        Main -> User: return to menu
+
+    else User selects "Download file" (choice == 2)
+        User -> Main: select option 2
+        Main -> GAP: get_active_ports(port)
+        GAP --> Main: (active_ports)
+
+        alt active_ports not empty
+           loop for each active_port
+    Main -> RFP: request_files_from_port(active_port)
+    ' --- Request/Response Pair ---
+    RFP -> HandleClient: [socket] "LIST_FILES"       '<< REQUEST
+    HandleClient -> GLF: get_local_files(active_port)
+    GLF -> ListFilesRec: list_files_recursive()
+    ListFilesRec --> GLF: (file info)
+    GLF --> HandleClient: (vector<FileInfo>)
+    HandleClient --> RFP: (file info as string)      '<< RESPONSE
+    RFP --> Main: (vector<FileInfo> from port)
+end
+            Main -> User: show available files (by key_id)
+            User -> Main: select File ID/key_id
+            Main -> DFB: [async/thread] download_files_background(selected_files, active_ports, ...)
+
+            DFB -> RFP: request_files_from_port(port) (to confirm seeders have file)
+            ' --- Request/Response Pair ---
+            RFP -> HandleClient: [socket] "LIST_FILES"           '<< REQUEST
+            HandleClient -> GLF: get_local_files(port)
+            GLF -> ListFilesRec: list_files_recursive()
+            ListFilesRec --> GLF: (file info)
+            GLF --> HandleClient: (vector<FileInfo>)
+            HandleClient --> RFP: (file info as string)          '<< RESPONSE
+            RFP --> DFB: (vector<FileInfo>)
+            loop for each chunk
+                DFB -> DCFP: [async/thread] download_chunk_from_port(port, filepath, chunk, ...)
+                ' --- Request/Response Pair ---
+                DCFP -> HandleClient: [socket] "DOWNLOAD_CHUNK"  '<< REQUEST
+                HandleClient -> GLF: get_local_files() [verify file]
+                GLF --> HandleClient: (verify chunk info)
+                HandleClient --> DCFP: (chunk data)              '<< RESPONSE
+                DCFP --> DFB: (chunk complete)
+            end
+            DFB --> Main: update progress/status
+            Main -> User: show download progress/status
+        else
+            Main -> User: "No other active ports found"
+        end
+        Main -> User: return to menu
+
+    else User selects "Download status" (choice == 3)
+        User -> Main: select option 3
+        Main -> User: show active/completed DownloadProgress for all files
+        Main -> User: return to menu
+
+    else User selects "Exit" (choice == 4)
+        User -> Main: select option 4
+        Main -> User: "Exiting..."
+        Main -> ServerT: [terminate]
+        break
+    end
+end
+
+note over RFP,HandleClient
+Explicit socket request/response pairs:
+- "LIST_FILES" <-> file info (as string)
+- "DOWNLOAD_CHUNK" <-> chunk data
+end note
+
+note over ServerT,HandleClient
+Each port runs server_thread + handle_client for incoming
+LIST_FILES / DOWNLOAD_CHUNK requests from other peer ports.
+@enduml

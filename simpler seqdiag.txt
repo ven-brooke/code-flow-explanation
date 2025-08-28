@@ -1,0 +1,63 @@
+@startuml
+actor User
+
+User -> Main: start ./seed
+
+loop menu
+  Main -> User: show_menu()
+  
+  alt choice == 1 (List files)
+    User -> Main: select option 1
+    Main -> GAP: get_active_ports()
+    GAP --> Main: active_ports
+    alt ports found
+      Main -> RFP: request_files_from_port(active_ports)
+      RFP -> ServerT: "LIST_FILES" [socket]
+      ServerT --> RFP: file info (response)
+      RFP --> Main: all file info
+      Main -> User: show file list
+    else
+      Main -> User: "No other active ports"
+    end
+
+  else choice == 2 (Download file)
+    User -> Main: select option 2
+    Main -> GAP: get_active_ports()
+    GAP --> Main: active_ports
+    alt ports found
+      Main -> RFP: request_files_from_port(active_ports)
+      RFP -> ServerT: "LIST_FILES" [socket]
+      ServerT --> RFP: file info (response)
+      RFP --> Main: file info
+      Main -> User: show file choices
+      User -> Main: select file/key_id
+      Main -> DFB: [thread] download_files_background(files, ports)
+      loop for each chunk
+        DFB -> DCFP: [thread] download_chunk_from_port(port, file, chunk)
+        DCFP -> ServerT: "DOWNLOAD_CHUNK" [socket]
+        ServerT --> DCFP: chunk data (response)
+        DCFP --> DFB: chunk complete
+      end
+      DFB --> Main: progress/status
+      Main -> User: show progress
+    else
+      Main -> User: "No other active ports"
+    end
+
+  else choice == 3 (Download status)
+    User -> Main: select option 3
+    Main -> User: show download status
+
+  else choice == 4 (Exit)
+    User -> Main: select option 4
+    Main -> User: "Exiting..."
+    break
+  end
+end
+
+note over RFP,ServerT
+Socket request/response pairs:
+- "LIST_FILES" <-> file info
+- "DOWNLOAD_CHUNK" <-> chunk data
+end note
+@enduml
